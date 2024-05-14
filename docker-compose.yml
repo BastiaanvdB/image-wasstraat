@@ -1,0 +1,103 @@
+version: '3.7'
+
+services:
+  # Candidate Registry
+  registry:
+    image: registry:2.8.3
+    restart: always
+    container_name: candidate-registry
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./registry/data:/var/lib/registry
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    networks:
+      gitlab-network:
+        ipv4_address: 172.20.0.2
+        aliases:
+          - candidate-registry
+
+  # GITLAB
+  gitlab-web:
+    image: 'gitlab/gitlab-ce:latest'
+    restart: always
+    container_name: gitlab-web
+    hostname: 'gitlab-web'
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2222:22"
+    volumes:
+      - './gitlab/config:/etc/gitlab'
+      - './gitlab/logs:/var/log/gitlab'
+      - './gitlab/data:/var/opt/gitlab'
+    networks:
+      gitlab-network:
+        ipv4_address: 172.20.0.3
+        aliases:
+          - gitlab-web
+
+  # RUNNER 1
+  gitlab-runner-1:
+    image: gitlab/gitlab-runner:alpine
+    restart: always
+    container_name: gitlab-runner-1
+    hostname: gitlab-runner-1
+    depends_on:
+      - gitlab-web
+    volumes:
+      - ./gitlab-runner/config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      gitlab-network:
+        ipv4_address: 172.20.0.4
+        aliases:
+          - gitlab-runner-1
+
+  clair:
+    image: quay.io/projectquay/clair:4.7.4
+    restart: always
+    container_name: clair
+    depends_on:
+      - postgres-clair
+    volumes:
+      - ./clair/clair-config/:/config/:ro
+      - ./clair/clair-tmp/:/tmp:rw
+    environment:
+      CLAIR_MODE: combo
+      CLAIR_CONF: /config/config.yaml
+    networks:
+      gitlab-network:
+        ipv4_address: 172.20.0.5
+        aliases:
+          - clair
+
+  postgres-clair:
+    image: postgres:16.2
+    restart: always
+    container_name: postgres-clair
+    environment:
+      POSTGRES_PASSWORD: ChangeMe
+      POSTGRES_USER: clair
+      POSTGRES_DB: clair
+    volumes:
+      - ./clair/postgres-data/:/var/lib/postgresql/data:rw
+    networks:
+      gitlab-network:
+        ipv4_address: 172.20.0.6
+        aliases:
+          - postgres-clair
+
+networks:
+  gitlab-network:
+    name: gitlab-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,42 @@
+stages:
+  - grype-scan
+  - clair-scan
+  - trivy-scan
+
+default:
+  image: docker:26.1.2
+  services:
+    - name: docker:26.1.2-dind
+      command: ["--insecure-registry=candidate-registry:5000"]
+  before_script:
+    - docker info
+    - echo "172.20.0.2 candidate-registry" >> /etc/hosts
+    - echo "172.20.0.5 clair" >> /etc/hosts
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_DRIVER: overlay2
+
+grype-scan:
+  stage: grype-scan
+  script:
+    - docker pull $IMAGE_NAME:$IMAGE_TAG
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest $IMAGE_NAME:$IMAGE_TAG
+  only:
+    - main
+
+clair-scan:
+  stage: clair-scan
+  script:
+    - docker pull bastiaanvdb/clairctl-debian:latest
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --add-host candidate-registry:172.20.0.2 bastiaanvdb/clairctl-debian:latest report --out json --host http://clair:6060 $IMAGE_NAME:$IMAGE_TAG
+    # - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock bastiaanvdb/clairctl-debian:latest report --out json --host http://clair:6060 $IMAGE_NAME:$IMAGE_TAG
+
+trivy-scan:
+  stage: trivy-scan
+  script:
+    - docker pull aquasec/trivy:latest
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest trivy image --no-progress $IMAGE_NAME:$IMAGE_TAG
