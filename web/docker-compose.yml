@@ -1,0 +1,10 @@
+version: '3.7'
+
+services:
+  image-wasstraat-website:
+    container_name: image-wasstraat-website
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 80:80
