@@ -1,23 +1,23 @@
 version: '3.7'
 
 services:
-  # Candidate Registry
-  registry:
-    image: registry:2.8.3
-    restart: always
-    container_name: candidate-registry
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./registry/data:/var/lib/registry
-    environment:
-      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
-      REGISTRY_STORAGE_DELETE_ENABLED: "true"
-    networks:
-      gitlab-network:
-        ipv4_address: 172.20.0.2
-        aliases:
-          - candidate-registry
+#  # Candidate Registry
+#  registry:
+#    image: registry:2.8.3
+#    restart: always
+#    container_name: candidate-registry
+#    ports:
+#      - "5000:5000"
+#    volumes:
+#      - ./registry/data:/var/lib/registry
+#    environment:
+#      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+#      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+#    networks:
+#      gitlab-network:
+#        ipv4_address: 172.20.0.2
+#        aliases:
+#          - candidate-registry
 
   # GITLAB
   gitlab-web:

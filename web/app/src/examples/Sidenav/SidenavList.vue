@@ -60,6 +60,18 @@ const getRoute = () => {
 
       <li class="nav-item">
         <sidenav-item
+            to="/registry"
+            :class="getRoute() === 'Registry' ? 'active' : ''"
+            :navText="'Registry'"
+        >
+          <template v-slot:icon>
+            <i class="ni ni-app text-info text-sm opacity-10"></i>
+          </template>
+        </sidenav-item>
+      </li>
+
+      <li class="nav-item">
+        <sidenav-item
           to="/certificates"
           :class="getRoute() === 'Certificates' ? 'active' : ''"
           :navText="'Certificates'"

@@ -2,16 +2,13 @@ stages:
   - grype-scan
   - clair-scan
   - trivy-scan
+  - syft-sbom-scan
+  - process-reports
 
 default:
   image: docker:26.1.2
   services:
     - name: docker:26.1.2-dind
-      command: ["--insecure-registry=candidate-registry:5000"]
-  before_script:
-    - docker info
-    - echo "172.20.0.2 candidate-registry" >> /etc/hosts
-    - echo "172.20.0.5 clair" >> /etc/hosts
 
 variables:
   IMAGE_NAME: $CI_REGISTRY_IMAGE
@@ -20,23 +17,102 @@ variables:
   DOCKER_HOST: tcp://docker:2375
   DOCKER_DRIVER: overlay2
 
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - reports/
+
 grype-scan:
   stage: grype-scan
   script:
+    - mkdir -p reports
     - docker pull $IMAGE_NAME:$IMAGE_TAG
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest $IMAGE_NAME:$IMAGE_TAG
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest $IMAGE_NAME:$IMAGE_TAG -o json > reports/grype-report.json
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - reports/
   only:
     - main
 
 clair-scan:
   stage: clair-scan
   script:
+    - mkdir -p reports
     - docker pull bastiaanvdb/clairctl-debian:latest
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --add-host candidate-registry:172.20.0.2 bastiaanvdb/clairctl-debian:latest report --out json --host http://clair:6060 $IMAGE_NAME:$IMAGE_TAG
-    # - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock bastiaanvdb/clairctl-debian:latest report --out json --host http://clair:6060 $IMAGE_NAME:$IMAGE_TAG
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock bastiaanvdb/clairctl-debian:latest report --out json --host http://172.20.0.5:6060 $IMAGE_NAME:$IMAGE_TAG > reports/clair-report.json
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - reports/
 
 trivy-scan:
   stage: trivy-scan
   script:
+    - mkdir -p reports
     - docker pull aquasec/trivy:latest
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest trivy image --no-progress $IMAGE_NAME:$IMAGE_TAG
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image $IMAGE_NAME:$IMAGE_TAG -f json > reports/trivy-report.json
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - reports/
+
+syft-sbom-scan:
+  stage: syft-sbom-scan
+  script:
+    - mkdir -p reports
+    - docker pull $IMAGE_NAME:$IMAGE_TAG
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:latest $IMAGE_NAME:$IMAGE_TAG -o json > reports/syft-sbom-report.json
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - reports/
+
+process-reports:
+  stage: process-reports
+  image: python:3.9-slim
+  script:
+    - pip install pandas
+    - ls -la reports
+    - |
+      python - <<EOF
+      import pandas as pd
+      import json
+
+      # Load Grype report
+      with open('reports/grype-report.json') as f:
+          grype_report = json.load(f)
+
+      # Load Clair report
+      with open('reports/clair-report.json') as f:
+          clair_report = json.load(f)
+
+      # Load Trivy report
+      with open('reports/trivy-report.json') as f:
+          trivy_report = json.load(f)
+
+      # Example: Convert reports to DataFrames
+      # Adjust this based on the structure of your JSON reports
+      grype_df = pd.json_normalize(grype_report)
+      clair_df = pd.json_normalize(clair_report)
+      trivy_df = pd.json_normalize(trivy_report)
+
+      # Example: Save DataFrames to CSV
+      grype_df.to_csv('reports/grype-report.csv', index=False)
+      clair_df.to_csv('reports/clair-report.csv', index=False)
+      trivy_df.to_csv('reports/trivy-report.csv', index=False)
+
+      # Example: Print DataFrame summaries
+      print(grype_df.to_string())
+      print(clair_df.to_string())
+      print(trivy_df.to_string())
+      EOF
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - reports/
+  dependencies:
+    - grype-scan
+    - clair-scan
+    - trivy-scan
+    - syft-sbom-scan
