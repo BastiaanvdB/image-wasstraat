@@ -1,5 +1,5 @@
 .idea/
-gitlab-runner/config/.runner_system_id
+gitlab-runners/config/.runner_system_id
 registry/*
 gitlab/*
 clair/clair-tmp

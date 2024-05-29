@@ -1,118 +1,503 @@
 stages:
-  - grype-scan
-  - clair-scan
-  - trivy-scan
-  - syft-sbom-scan
-  - process-reports
+  - initialize
+  - static security scan
+  - static security scan report process
+  - static security scan report combine
+  - sbom scan
+  - sbom report process
+  - sbom report combine
+  - dockle scan
+  - dockle report process
+  - dockle report combine
+  - final combine
 
 default:
   image: docker:26.1.2
   services:
     - name: docker:26.1.2-dind
+      alias: docker-dind
 
 variables:
   IMAGE_NAME: $CI_REGISTRY_IMAGE
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
   DOCKER_TLS_CERTDIR: ""
-  DOCKER_HOST: tcp://docker:2375
+  DOCKER_HOST: tcp://docker-dind:2375/
   DOCKER_DRIVER: overlay2
 
-cache:
-  key: "$CI_COMMIT_REF_SLUG"
-  paths:
-    - reports/
+# Initialization stage
+initialize-job:
+  stage: initialize
+  script:
+    - echo "Hello, World!"
 
+# Static security scan
 grype-scan:
-  stage: grype-scan
+  stage: static security scan
+  needs: [initialize-job]
+  services:
+    - name: docker:26.1.2-dind
+      alias: docker-dind-grype
+  variables:
+    DOCKER_HOST: tcp://docker-dind-grype:2375/
   script:
     - mkdir -p reports
-    - docker pull $IMAGE_NAME:$IMAGE_TAG
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest $IMAGE_NAME:$IMAGE_TAG -o json > reports/grype-report.json
-  cache:
-    key: "$CI_COMMIT_REF_SLUG"
+    - docker run --rm quay.io/bastiaanvanderbijl/grype $IMAGE_NAME:$IMAGE_TAG -o json > reports/grype-report.json
+  artifacts:
     paths:
       - reports/
-  only:
-    - main
+  allow_failure: true
 
 clair-scan:
-  stage: clair-scan
+  stage: static security scan
+  needs: [initialize-job]
+  services:
+    - name: docker:26.1.2-dind
+      alias: docker-dind-clair
+  variables:
+    DOCKER_HOST: tcp://docker-dind-clair:2375/
   script:
     - mkdir -p reports
-    - docker pull bastiaanvdb/clairctl-debian:latest
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock bastiaanvdb/clairctl-debian:latest report --out json --host http://172.20.0.5:6060 $IMAGE_NAME:$IMAGE_TAG > reports/clair-report.json
-  cache:
-    key: "$CI_COMMIT_REF_SLUG"
+    - docker run --rm quay.io/bastiaanvanderbijl/clairctl-debian report --out json --host http://172.20.0.5:6060 $IMAGE_NAME:$IMAGE_TAG > reports/clair-report.json
+  artifacts:
     paths:
       - reports/
+  allow_failure: true
 
 trivy-scan:
-  stage: trivy-scan
+  stage: static security scan
+  needs: [initialize-job]
+  services:
+    - name: docker:26.1.2-dind
+      alias: docker-dind-trivy
+  variables:
+    DOCKER_HOST: tcp://docker-dind-trivy:2375/
   script:
     - mkdir -p reports
-    - docker pull aquasec/trivy:latest
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image $IMAGE_NAME:$IMAGE_TAG -f json > reports/trivy-report.json
-  cache:
-    key: "$CI_COMMIT_REF_SLUG"
+    - docker run --rm quay.io/bastiaanvanderbijl/trivy image $IMAGE_NAME:$IMAGE_TAG -f json > reports/trivy-report.json
+  artifacts:
     paths:
       - reports/
+  allow_failure: true
 
-syft-sbom-scan:
-  stage: syft-sbom-scan
-  script:
-    - mkdir -p reports
-    - docker pull $IMAGE_NAME:$IMAGE_TAG
-    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:latest $IMAGE_NAME:$IMAGE_TAG -o json > reports/syft-sbom-report.json
-  cache:
-    key: "$CI_COMMIT_REF_SLUG"
-    paths:
-      - reports/
-
-process-reports:
-  stage: process-reports
-  image: python:3.9-slim
+process-grype:
+  stage: static security scan report process
+  needs: [grype-scan]
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
   script:
     - pip install pandas
-    - ls -la reports
     - |
       python - <<EOF
-      import pandas as pd
       import json
+      import pandas as pd
 
-      # Load Grype report
-      with open('reports/grype-report.json') as f:
-          grype_report = json.load(f)
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
 
-      # Load Clair report
-      with open('reports/clair-report.json') as f:
-          clair_report = json.load(f)
+      # Load the Grype report
+      grype_report = load_json_report('reports/grype-report.json')
 
-      # Load Trivy report
-      with open('reports/trivy-report.json') as f:
-          trivy_report = json.load(f)
+      # Process Grype report
+      grype_vulns = grype_report['matches']
+      grype_data = []
+      for match in grype_vulns:
+          vuln = match['vulnerability']
+          artifact = match['artifact']
+          grype_data.append({
+              'CVE ID': vuln['id'],
+              'Package Name': artifact['name'],
+              'Installed Version': artifact['version'],
+              'Severity': vuln['severity'],
+              'Description': vuln.get('description', ''),
+              'Fixed Version': vuln.get('fixed_in_version', ''),
+              'Found by Scanner': ['Grype'],
+              'Link to More Information': vuln.get('links', [''])[0]
+          })
 
-      # Example: Convert reports to DataFrames
-      # Adjust this based on the structure of your JSON reports
-      grype_df = pd.json_normalize(grype_report)
-      clair_df = pd.json_normalize(clair_report)
-      trivy_df = pd.json_normalize(trivy_report)
-
-      # Example: Save DataFrames to CSV
-      grype_df.to_csv('reports/grype-report.csv', index=False)
-      clair_df.to_csv('reports/clair-report.csv', index=False)
-      trivy_df.to_csv('reports/trivy-report.csv', index=False)
-
-      # Example: Print DataFrame summaries
-      print(grype_df.to_string())
-      print(clair_df.to_string())
-      print(trivy_df.to_string())
+      # Save processed data
+      pd.DataFrame(grype_data).to_json('reports/processed_grype_report.json', orient='records', indent=4)
       EOF
-  cache:
-    key: "$CI_COMMIT_REF_SLUG"
+  artifacts:
     paths:
-      - reports/
+      - reports/processed_grype_report.json
   dependencies:
     - grype-scan
+  allow_failure: true
+
+process-clair:
+  stage: static security scan report process
+  needs: [clair-scan]
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the Clair report
+      clair_report = load_json_report('reports/clair-report.json')
+
+      # Process Clair report
+      clair_vulns = clair_report['vulnerabilities']
+      clair_data = []
+      for vuln_id, vuln_details in clair_vulns.items():
+          package_id = vuln_details['package']['id']
+          package_name = clair_report['packages'][package_id]['name'] if package_id in clair_report['packages'] else vuln_details['package']['name']
+          package_version = clair_report['packages'][package_id]['version'] if package_id in clair_report['packages'] else vuln_details['package']['version']
+      
+          clair_data.append({
+              'CVE ID': vuln_details['name'],
+              'Package Name': package_name,
+              'Installed Version': package_version,
+              'Severity': vuln_details['normalized_severity'],
+              'Description': vuln_details.get('description', ''),
+              'Fixed Version': vuln_details.get('fixed_in_version', ''),
+              'Found by Scanner': ['Clair'],
+              'Link to More Information': vuln_details.get('links', '')
+          })
+
+      # Save processed data
+      pd.DataFrame(clair_data).to_json('reports/processed_clair_report.json', orient='records', indent=4)
+      EOF
+  artifacts:
+    paths:
+      - reports/processed_clair_report.json
+  dependencies:
     - clair-scan
+  allow_failure: true
+
+process-trivy:
+  stage: static security scan report process
+  needs: [trivy-scan]
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the Trivy report
+      trivy_report = load_json_report('reports/trivy-report.json')
+
+      # Process Trivy report
+      trivy_vulns = trivy_report['Results']
+      trivy_data = []
+      for result in trivy_vulns:
+          for vuln in result['Vulnerabilities']:
+              trivy_data.append({
+                  'CVE ID': vuln['VulnerabilityID'],
+                  'Package Name': vuln['PkgName'],
+                  'Installed Version': vuln['InstalledVersion'],
+                  'Severity': vuln['Severity'],
+                  'Description': vuln.get('Description', ''),
+                  'Fixed Version': vuln.get('FixedVersion', ''),
+                  'Found by Scanner': ['Trivy'],
+                  'Link to More Information': vuln.get('PrimaryURL', '')
+              })
+
+      # Save processed data
+      pd.DataFrame(trivy_data).to_json('reports/processed_trivy_report.json', orient='records', indent=4)
+      EOF
+  artifacts:
+    paths:
+      - reports/processed_trivy_report.json
+  dependencies:
     - trivy-scan
-    - syft-sbom-scan
+  allow_failure: true
+
+combine-static-security-reports:
+  stage: static security scan report combine
+  needs:
+    - process-trivy
+    - process-clair
+    - process-grype
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+      from collections import defaultdict
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the processed reports
+      grype_data = load_json_report('reports/processed_grype_report.json')
+      clair_data = load_json_report('reports/processed_clair_report.json')
+      trivy_data = load_json_report('reports/processed_trivy_report.json')
+
+      # Combine all data
+      all_data = grype_data + clair_data + trivy_data
+
+      # Merge data by CVE ID, ensuring no duplicates
+      merged_data = defaultdict(dict)
+      for entry in all_data:
+          cve_id = entry['CVE ID']
+          if cve_id in merged_data:
+              for key, value in entry.items():
+                  if key == 'Found by Scanner':
+                      merged_data[cve_id][key] = list(set(merged_data[cve_id][key] + value))
+                  elif not merged_data[cve_id].get(key) or merged_data[cve_id][key] in ['', 'unknown', 'Unknown']:
+                      merged_data[cve_id][key] = value
+          else:
+              merged_data[cve_id] = entry
+
+      # Convert to list for DataFrame
+      merged_data_list = list(merged_data.values())
+
+      # Create dataframe
+      df_combined = pd.DataFrame(merged_data_list)
+
+      # Convert combined dataframe to JSON
+      combined_json = df_combined.to_json(orient='records', indent=4)
+
+      # Save to a file
+      output_path = 'reports/combined_cve_report.json'
+      with open(output_path, 'w') as f:
+          f.write(combined_json)
+
+      EOF
+  artifacts:
+    paths:
+      - reports/combined_cve_report.json
+  dependencies:
+    - process-grype
+    - process-clair
+    - process-trivy
+  allow_failure: true
+
+# SBOM scan
+syft-scan:
+  stage: sbom scan
+  needs: [initialize-job]
+  services:
+    - name: docker:26.1.2-dind
+      alias: docker-dind-syft
+  variables:
+    DOCKER_HOST: tcp://docker-dind-syft:2375/
+  script:
+    - mkdir -p reports
+    - docker run --rm quay.io/bastiaanvanderbijl/syft $IMAGE_NAME:$IMAGE_TAG -o json > reports/syft-scan.json
+  artifacts:
+    paths:
+      - reports/
+  allow_failure: false
+
+process-syft:
+  stage: sbom report process
+  needs:
+    - syft-scan
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the Syft report
+      syft_report = load_json_report('reports/syft-scan.json')
+
+      # Process Syft report
+      syft_data = []
+      for artifact in syft_report['artifacts']:
+          syft_data.append({
+              'Package Name': artifact['name'],
+              'Version': artifact['version'],
+              'Type': artifact['type'],
+              'Locations': ', '.join([loc['path'] for loc in artifact['locations']]),
+              'Licenses': ', '.join([license['name'] for license in artifact['licenses']]) if 'licenses' in artifact else ''
+          })
+
+      # Save processed data
+      pd.DataFrame(syft_data).to_json('reports/processed_syft_report.json', orient='records', indent=4)
+      EOF
+  artifacts:
+    paths:
+      - reports/processed_syft_report.json
+  dependencies:
+    - syft-scan
+  allow_failure: false
+
+combine-sbom-reports:
+  stage: sbom report combine
+  needs:
+    - process-syft
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the processed reports
+      syft_data = load_json_report('reports/processed_syft_report.json')
+
+      # Save combined data
+      output_path = 'reports/combined_sbom_report.json'
+      with open(output_path, 'w') as f:
+          json.dump(syft_data, f, indent=4)
+
+      EOF
+  artifacts:
+    paths:
+      - reports/combined_sbom_report.json
+  dependencies:
+    - process-syft
+  allow_failure: true
+
+# Dockle scan
+dockle-scan:
+  stage: dockle scan
+  needs: [initialize-job]
+  services:
+    - name: docker:26.1.2-dind
+      alias: docker-dind-dockle
+  variables:
+    DOCKER_HOST: tcp://docker-dind-dockle:2375/
+  script:
+    - mkdir -p reports
+    - docker run --rm -v $(pwd)/reports:/tmp/reports quay.io/bastiaanvanderbijl/dockle -f json -o /tmp/reports/dockle-report.json $IMAGE_NAME:$IMAGE_TAG
+  artifacts:
+    paths:
+      - reports/
+  allow_failure: true
+
+process-dockle:
+  stage: dockle report process
+  needs:
+    - dockle-scan
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the Dockle report
+      dockle_report = load_json_report('reports/dockle-report.json')
+
+      # Process Dockle report
+      dockle_data = []
+      for detail in dockle_report['details']:
+          dockle_data.append({
+              'Code': detail['code'],
+              'Title': detail['title'],
+              'Level': detail['level'],
+              'Alerts': ', '.join(detail['alerts']),
+          })
+
+      # Save processed data
+      pd.DataFrame(dockle_data).to_json('reports/processed_dockle_report.json', orient='records', indent=4)
+      EOF
+  artifacts:
+    paths:
+      - reports/processed_dockle_report.json
+  dependencies:
+    - dockle-scan
+  allow_failure: true
+
+combine-dockle-reports:
+  stage: dockle report combine
+  needs:
+    - process-dockle
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the processed Dockle report
+      dockle_data = load_json_report('reports/processed_dockle_report.json')
+
+      # Save combined data
+      output_path = 'reports/combined_dockle_report.json'
+      with open(output_path, 'w') as f:
+          json.dump(dockle_data, f, indent=4)
+
+      EOF
+  artifacts:
+    paths:
+      - reports/combined_dockle_report.json
+  dependencies:
+    - process-dockle
+  allow_failure: true
+
+# Final combine
+final-combine:
+  stage: final combine
+  needs:
+    - combine-static-security-reports
+    - combine-sbom-reports
+    - combine-dockle-reports
+  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
+  script:
+    - pip install pandas
+    - |
+      python - <<EOF
+      import json
+      import pandas as pd
+
+      def load_json_report(file_path):
+          with open(file_path) as f:
+              return json.load(f)
+
+      # Load the combined reports
+      static_security_data = load_json_report('reports/combined_cve_report.json')
+      sbom_data = load_json_report('reports/combined_sbom_report.json')
+      dockle_data = load_json_report('reports/combined_dockle_report.json')
+
+      # Combine all data into one final report
+      final_combined_data = {
+          'Static Security Scan': static_security_data,
+          'SBOM': sbom_data,
+          'Docker Best Practices': dockle_data
+      }
+
+      # Save the final combined report
+      output_path = 'reports/final_combined_report.json'
+      with open(output_path, 'w') as f:
+          json.dump(final_combined_data, f, indent=4)
+
+      EOF
+  artifacts:
+    paths:
+      - reports/final_combined_report.json
+  dependencies:
+    - combine-static-security-reports
+    - combine-sbom-reports
+    - combine-dockle-reports
+  allow_failure: true
