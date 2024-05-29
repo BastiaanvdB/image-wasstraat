@@ -12,9 +12,9 @@ stages:
   - final combine
 
 default:
-  image: docker:26.1.2
+  image: docker:26.1.3
   services:
-    - name: docker:26.1.2-dind
+    - name: docker:26.1.3-dind
       alias: docker-dind
 
 variables:
@@ -35,7 +35,7 @@ grype-scan:
   stage: static security scan
   needs: [initialize-job]
   services:
-    - name: docker:26.1.2-dind
+    - name: docker:26.1.3-dind
       alias: docker-dind-grype
   variables:
     DOCKER_HOST: tcp://docker-dind-grype:2375/
@@ -51,7 +51,7 @@ clair-scan:
   stage: static security scan
   needs: [initialize-job]
   services:
-    - name: docker:26.1.2-dind
+    - name: docker:26.1.3-dind
       alias: docker-dind-clair
   variables:
     DOCKER_HOST: tcp://docker-dind-clair:2375/
@@ -67,7 +67,7 @@ trivy-scan:
   stage: static security scan
   needs: [initialize-job]
   services:
-    - name: docker:26.1.2-dind
+    - name: docker:26.1.3-dind
       alias: docker-dind-trivy
   variables:
     DOCKER_HOST: tcp://docker-dind-trivy:2375/
@@ -284,13 +284,13 @@ syft-scan:
   stage: sbom scan
   needs: [initialize-job]
   services:
-    - name: docker:26.1.2-dind
+    - name: docker:26.1.3-dind
       alias: docker-dind-syft
   variables:
     DOCKER_HOST: tcp://docker-dind-syft:2375/
   script:
     - mkdir -p reports
-    - docker run --rm quay.io/bastiaanvanderbijl/syft $IMAGE_NAME:$IMAGE_TAG -o json > reports/syft-scan.json
+    - docker run --rm quay.io/bastiaanvanderbijl/syft $IMAGE_NAME:$IMAGE_TAG --scope all-layers -o json > reports/syft-report.json
   artifacts:
     paths:
       - reports/
@@ -312,22 +312,48 @@ process-syft:
           with open(file_path) as f:
               return json.load(f)
 
+      def extract_file_metadata(files, artifact_type):
+          file_metadata = []
+          for file in files:
+              file_metadata.append({
+                  'path': file['path'],
+                  'type': artifact_type,
+                  'digest': file.get('digest', {}),
+                  'isConfigFile': file.get('isConfigFile', False)
+              })
+          return file_metadata
+
       # Load the Syft report
-      syft_report = load_json_report('reports/syft-scan.json')
+      syft_report = load_json_report('reports/syft-report.json')
 
       # Process Syft report
-      syft_data = []
+      packages_data = []
+      files_data = []
       for artifact in syft_report['artifacts']:
-          syft_data.append({
-              'Package Name': artifact['name'],
-              'Version': artifact['version'],
-              'Type': artifact['type'],
-              'Locations': ', '.join([loc['path'] for loc in artifact['locations']]),
-              'Licenses': ', '.join([license['name'] for license in artifact['licenses']]) if 'licenses' in artifact else ''
+          packages_data.append({
+              'name': artifact['name'],
+              'version': artifact['version'],
+              'type': artifact['type'],
+              'locations': [location['path'] for location in artifact['locations']],
+              'metadata': {
+                  'package': artifact['metadata'].get('package', ''),
+                  'source': artifact['metadata'].get('source', ''),
+                  'version': artifact['metadata'].get('version', ''),
+                  'sourceVersion': artifact['metadata'].get('sourceVersion', ''),
+                  'architecture': artifact['metadata'].get('architecture', ''),
+                  'maintainer': artifact['metadata'].get('maintainer', ''),
+                  'installedSize': artifact['metadata'].get('installedSize', 0)
+              }
           })
+          files_data.extend(extract_file_metadata(artifact['metadata'].get('files', []), artifact['type']))
 
       # Save processed data
-      pd.DataFrame(syft_data).to_json('reports/processed_syft_report.json', orient='records', indent=4)
+      processed_data = {
+          'packages': packages_data,
+          'files': files_data
+      }
+      with open('reports/processed_syft_report.json', 'w') as f:
+          json.dump(processed_data, f, indent=4)
       EOF
   artifacts:
     paths:
@@ -336,44 +362,14 @@ process-syft:
     - syft-scan
   allow_failure: false
 
-combine-sbom-reports:
-  stage: sbom report combine
-  needs:
-    - process-syft
-  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
-  script:
-    - pip install pandas
-    - |
-      python - <<EOF
-      import json
-      import pandas as pd
 
-      def load_json_report(file_path):
-          with open(file_path) as f:
-              return json.load(f)
-
-      # Load the processed reports
-      syft_data = load_json_report('reports/processed_syft_report.json')
-
-      # Save combined data
-      output_path = 'reports/combined_sbom_report.json'
-      with open(output_path, 'w') as f:
-          json.dump(syft_data, f, indent=4)
-
-      EOF
-  artifacts:
-    paths:
-      - reports/combined_sbom_report.json
-  dependencies:
-    - process-syft
-  allow_failure: true
 
 # Dockle scan
 dockle-scan:
   stage: dockle scan
   needs: [initialize-job]
   services:
-    - name: docker:26.1.2-dind
+    - name: docker:26.1.3-dind
       alias: docker-dind-dockle
   variables:
     DOCKER_HOST: tcp://docker-dind-dockle:2375/
@@ -385,84 +381,14 @@ dockle-scan:
       - reports/
   allow_failure: true
 
-process-dockle:
-  stage: dockle report process
-  needs:
-    - dockle-scan
-  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
-  script:
-    - pip install pandas
-    - |
-      python - <<EOF
-      import json
-      import pandas as pd
-
-      def load_json_report(file_path):
-          with open(file_path) as f:
-              return json.load(f)
-
-      # Load the Dockle report
-      dockle_report = load_json_report('reports/dockle-report.json')
-
-      # Process Dockle report
-      dockle_data = []
-      for detail in dockle_report['details']:
-          dockle_data.append({
-              'Code': detail['code'],
-              'Title': detail['title'],
-              'Level': detail['level'],
-              'Alerts': ', '.join(detail['alerts']),
-          })
-
-      # Save processed data
-      pd.DataFrame(dockle_data).to_json('reports/processed_dockle_report.json', orient='records', indent=4)
-      EOF
-  artifacts:
-    paths:
-      - reports/processed_dockle_report.json
-  dependencies:
-    - dockle-scan
-  allow_failure: true
-
-combine-dockle-reports:
-  stage: dockle report combine
-  needs:
-    - process-dockle
-  image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
-  script:
-    - pip install pandas
-    - |
-      python - <<EOF
-      import json
-      import pandas as pd
-
-      def load_json_report(file_path):
-          with open(file_path) as f:
-              return json.load(f)
-
-      # Load the processed Dockle report
-      dockle_data = load_json_report('reports/processed_dockle_report.json')
-
-      # Save combined data
-      output_path = 'reports/combined_dockle_report.json'
-      with open(output_path, 'w') as f:
-          json.dump(dockle_data, f, indent=4)
-
-      EOF
-  artifacts:
-    paths:
-      - reports/combined_dockle_report.json
-  dependencies:
-    - process-dockle
-  allow_failure: true
 
 # Final combine
 final-combine:
   stage: final combine
   needs:
     - combine-static-security-reports
-    - combine-sbom-reports
-    - combine-dockle-reports
+    - dockle-scan
+    - process-syft
   image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
   script:
     - pip install pandas
@@ -477,14 +403,16 @@ final-combine:
 
       # Load the combined reports
       static_security_data = load_json_report('reports/combined_cve_report.json')
-      sbom_data = load_json_report('reports/combined_sbom_report.json')
-      dockle_data = load_json_report('reports/combined_dockle_report.json')
+      sbom_data = load_json_report('reports/processed_syft_report.json')
+      dockle_data = load_json_report('reports/dockle-report.json')
 
       # Combine all data into one final report
       final_combined_data = {
-          'Static Security Scan': static_security_data,
-          'SBOM': sbom_data,
-          'Docker Best Practices': dockle_data
+          'image': "$IMAGE_NAME",
+          'version': "$IMAGE_TAG",
+          'vulnerabilities': static_security_data,
+          'sbom': sbom_data,
+          'container_image_linter': dockle_data
       }
 
       # Save the final combined report
@@ -498,6 +426,6 @@ final-combine:
       - reports/final_combined_report.json
   dependencies:
     - combine-static-security-reports
-    - combine-sbom-reports
-    - combine-dockle-reports
+    - process-syft
+    - dockle-scan
   allow_failure: true

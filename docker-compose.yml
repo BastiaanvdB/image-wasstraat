@@ -67,7 +67,7 @@ services:
       - postgres-clair
     volumes:
       - ./clair/clair-config/:/config/:ro
-      - ./clair/clair-tmp/:/tmp:rw
+      - clair-tmp:/tmp:rw
     environment:
       CLAIR_MODE: combo
       CLAIR_CONF: /config/config.yaml
@@ -86,7 +86,7 @@ services:
       POSTGRES_USER: clair
       POSTGRES_DB: clair
     volumes:
-      - ./clair/postgres-data/:/var/lib/postgresql/data:rw
+      - postgres-clair-data:/var/lib/postgresql/data:rw
     networks:
       gitlab-network:
         ipv4_address: 172.20.0.6
@@ -116,6 +116,8 @@ volumes:
   gitlab-config:
   gitlab-logs:
   gitlab-data:
+  postgres-clair-data:
+  clair-tmp:
 
 networks:
   gitlab-network:
