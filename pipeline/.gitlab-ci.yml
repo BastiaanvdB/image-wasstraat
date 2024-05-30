@@ -312,45 +312,45 @@ process-syft:
           with open(file_path) as f:
               return json.load(f)
 
-      def extract_file_metadata(files, artifact_type):
-          file_metadata = []
-          for file in files:
-              file_metadata.append({
-                  'path': file['path'],
-                  'type': artifact_type,
-                  'digest': file.get('digest', {}),
-                  'isConfigFile': file.get('isConfigFile', False)
-              })
-          return file_metadata
-
       # Load the Syft report
       syft_report = load_json_report('reports/syft-report.json')
 
       # Process Syft report
       packages_data = []
       files_data = []
+
+      # Extract distro information
+      distro_data = syft_report.get('distro', {})
+
+      # Process packages data
       for artifact in syft_report['artifacts']:
           packages_data.append({
               'name': artifact['name'],
               'version': artifact['version'],
               'type': artifact['type'],
-              'locations': [location['path'] for location in artifact['locations']],
-              'metadata': {
-                  'package': artifact['metadata'].get('package', ''),
-                  'source': artifact['metadata'].get('source', ''),
-                  'version': artifact['metadata'].get('version', ''),
-                  'sourceVersion': artifact['metadata'].get('sourceVersion', ''),
-                  'architecture': artifact['metadata'].get('architecture', ''),
-                  'maintainer': artifact['metadata'].get('maintainer', ''),
-                  'installedSize': artifact['metadata'].get('installedSize', 0)
-              }
+              'architecture': artifact['metadata'].get('architecture', None),
+              'maintainer': artifact['metadata'].get('maintainer', None),
+              'installedSize': artifact['metadata'].get('installedSize', None),
+              'locations': [location['path'] for location in artifact['locations']]
           })
-          files_data.extend(extract_file_metadata(artifact['metadata'].get('files', []), artifact['type']))
+
+      # Process files data
+      for file in syft_report.get('files', []):
+          files_data.append({
+              'path': file.get('location', {}).get('path', None),
+              'mode': file.get('metadata', {}).get('mode', None),
+              'type': file.get('metadata', {}).get('type', None),
+              'userid': file.get('metadata', {}).get('userID', None),
+              'groupid': file.get('metadata', {}).get('groupID', None),
+              'mimeType': file.get('metadata', {}).get('mimeType', None),
+              'size': file.get('metadata', {}).get('size', None)
+          })
 
       # Save processed data
       processed_data = {
           'packages': packages_data,
-          'files': files_data
+          'files': files_data,
+          'distro': distro_data
       }
       with open('reports/processed_syft_report.json', 'w') as f:
           json.dump(processed_data, f, indent=4)
@@ -361,6 +361,7 @@ process-syft:
   dependencies:
     - syft-scan
   allow_failure: false
+
 
 
 

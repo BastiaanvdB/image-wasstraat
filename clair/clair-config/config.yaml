@@ -12,7 +12,7 @@ matcher:
   connstring: "host=postgres-clair port=5432 dbname=clair user=clair password=ChangeMe sslmode=disable"
   indexer_addr: "http://localhost:6060"
   migrations: true
-  period: "2h"
+  period: "24h"
   disable_updaters: false
   update_retention: 2
 
