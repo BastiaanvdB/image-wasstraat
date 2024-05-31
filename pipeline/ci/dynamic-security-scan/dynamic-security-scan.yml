@@ -1,0 +1,68 @@
+default:
+  image: docker:26.1.3
+  services:
+    - name: docker:26.1.3-dind
+      alias: docker-dind
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_HOST: tcp://docker-dind:2375/
+  DOCKER_DRIVER: overlay2
+
+falco-scan:
+  stage: dynamic security scan
+  needs: [initialize-job]
+  services:
+    - name: docker:26.1.3-dind
+      alias: docker-dind-falco
+  variables:
+    DOCKER_HOST: tcp://docker-dind-falco:2375/
+  script:
+    # Print the current directory
+    - echo "Current directory is $(pwd)"
+    
+    # Pull the Falco image
+    - docker pull falcosecurity/falco:latest
+    
+    # Ensure the report directory exists
+    - mkdir -p reports
+
+    # Run Falco container with the custom rules and required volume mounts
+    - |
+      if [ -f $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml ]; then
+        docker run --rm -d --name falco --privileged \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml:/etc/falco/falco_rules.yaml:ro \
+          -v /proc:/host/proc:ro \
+          -v /boot:/host/boot:ro \
+          -v /lib/modules:/host/lib/modules:ro \
+          -v /usr:/host/usr:ro \
+          falcosecurity/falco:latest
+      else
+        echo "Falco rules file not found: $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml"
+        exit 1
+      fi
+
+    # Wait to ensure Falco has time to start
+    - sleep 30
+
+    # Run the specified test image to trigger events
+    - |
+      docker run --rm -d --name test-container $IMAGE_NAME:$IMAGE_TAG
+
+    # Debugging: Check the status of the Falco container
+    - docker ps -a
+    
+    # Wait to allow Falco to detect events
+    - sleep 60  
+
+    # Debugging: Check the logs of the Falco container before saving
+    - docker logs falco || echo "Falco container not found or has exited."
+    
+    # Retrieve Falco logs and save them as an artifact
+    - docker logs falco > reports/falco-report.json || echo "Failed to save Falco logs."
+  artifacts:
+    paths:
+      - reports/
