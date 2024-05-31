@@ -1,0 +1,4 @@
+initialize-job:
+  stage: initialize
+  script:
+    - echo "Hello, World!"
