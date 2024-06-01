@@ -19,6 +19,8 @@ grype-scan:
       alias: docker-dind-grype
   variables:
     DOCKER_HOST: tcp://docker-dind-grype:2375/
+  before_script:
+    - while ! docker info; do sleep 1; done 
   script:
     - mkdir -p reports
     - docker run --rm quay.io/bastiaanvanderbijl/grype $IMAGE_NAME:$IMAGE_TAG -o json > reports/grype-report.json
@@ -26,6 +28,9 @@ grype-scan:
     paths:
       - reports/
   allow_failure: true
+  after_script:
+    - docker container prune -f
+    - docker image prune -f
 
 clair-scan:
   stage: static security scan
@@ -35,6 +40,8 @@ clair-scan:
       alias: docker-dind-clair
   variables:
     DOCKER_HOST: tcp://docker-dind-clair:2375/
+  before_script:
+    - while ! docker info; do sleep 1; done 
   script:
     - mkdir -p reports
     - docker run --rm quay.io/bastiaanvanderbijl/clairctl-debian report --out json --host http://172.20.0.5:6060 $IMAGE_NAME:$IMAGE_TAG > reports/clair-report.json
@@ -42,6 +49,9 @@ clair-scan:
     paths:
       - reports/
   allow_failure: true
+  after_script:
+    - docker container prune -f
+    - docker image prune -f
 
 trivy-scan:
   stage: static security scan
@@ -51,6 +61,8 @@ trivy-scan:
       alias: docker-dind-trivy
   variables:
     DOCKER_HOST: tcp://docker-dind-trivy:2375/
+  before_script:
+    - while ! docker info; do sleep 1; done 
   script:
     - mkdir -p reports
     - docker run --rm quay.io/bastiaanvanderbijl/trivy image $IMAGE_NAME:$IMAGE_TAG -f json > reports/trivy-report.json
@@ -58,3 +70,6 @@ trivy-scan:
     paths:
       - reports/
   allow_failure: true
+  after_script:
+    - docker container prune -f
+    - docker image prune -f

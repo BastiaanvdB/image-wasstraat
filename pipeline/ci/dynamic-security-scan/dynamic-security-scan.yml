@@ -19,6 +19,8 @@ falco-scan:
       alias: docker-dind-falco
   variables:
     DOCKER_HOST: tcp://docker-dind-falco:2375/
+  before_script:
+    - while ! docker info; do sleep 1; done 
   script:
     # Print the current directory
     - echo "Current directory is $(pwd)"
@@ -31,17 +33,19 @@ falco-scan:
 
     # Run Falco container with the custom rules and required volume mounts
     - |
-      if [ -f $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml ]; then
+      if [ -f $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml ] && [ -f $(pwd)/ci/dynamic-security-scan/config/falco.yaml ]; then
         docker run --rm -d --name falco --privileged \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml:/etc/falco/falco_rules.yaml:ro \
+          -v $(pwd)/ci/dynamic-security-scan/config/falco.yaml:/etc/falco/falco.yaml:ro \
+          -v $(pwd)/ci/dynamic-security-scan/reports:/var/log \
           -v /proc:/host/proc:ro \
           -v /boot:/host/boot:ro \
           -v /lib/modules:/host/lib/modules:ro \
           -v /usr:/host/usr:ro \
           falcosecurity/falco:latest
       else
-        echo "Falco rules file not found: $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml"
+        echo "Falco configuration or rules file not found."
         exit 1
       fi
 
@@ -62,7 +66,7 @@ falco-scan:
     - docker logs falco || echo "Falco container not found or has exited."
     
     # Retrieve Falco logs and save them as an artifact
-    - docker logs falco > reports/falco-report.json || echo "Failed to save Falco logs."
+    - cp $(pwd)/ci/dynamic-security-scan/reports/falco-report.json reports/falco-report.json || echo "Failed to save Falco logs."
   artifacts:
     paths:
       - reports/
