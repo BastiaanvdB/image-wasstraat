@@ -4,7 +4,7 @@ final-combine:
     - combine-static-security-reports
     - dockle-scan
     - process-syft
-    - falco-scan
+    - process-falco
   image: quay.io/bastiaanvanderbijl/python:3.12.3-slim
   script:
     - pip install pandas
@@ -19,6 +19,7 @@ final-combine:
 
       # Load the combined reports
       static_security_data = load_json_report('reports/combined_cve_report.json')
+      dynamic_security_data = load_json_report('reports/filtered_falcon_events.json')
       sbom_data = load_json_report('reports/processed_syft_report.json')
       dockle_data = load_json_report('reports/dockle-report.json')
 
@@ -26,7 +27,8 @@ final-combine:
       final_combined_data = {
           'image': "$IMAGE_NAME",
           'version': "$IMAGE_TAG",
-          'vulnerabilities': static_security_data,
+          'static scan vulnerabilities': static_security_data,
+          'dynamic scan vulnerabilities': dynamic_security_data,
           'sbom': sbom_data,
           'container_image_linter': dockle_data
       }
@@ -44,5 +46,5 @@ final-combine:
     - combine-static-security-reports
     - process-syft
     - dockle-scan
-    - falco-scan
+    - process-falco
   allow_failure: true

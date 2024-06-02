@@ -2,6 +2,7 @@ stages:
   - initialize
   - static security scan
   - dynamic security scan
+  - dynamic security scan report process
   - static security scan report process
   - static security scan report combine
   - sbom scan
@@ -18,6 +19,7 @@ include:
   - local: 'ci/static-security-scan/static-security-report-process.yml'
   - local: 'ci/static-security-scan/static-security-report-combine.yml'
   - local: 'ci/dynamic-security-scan/dynamic-security-scan.yml'
+  - local: 'ci/dynamic-security-scan/dynamic-security-report-process.yml'
   - local: 'ci/sbom-scan/sbom-scan.yml'
   - local: 'ci/sbom-scan/sbom-report-process.yml'
   - local: 'ci/image-linter/dockle-scan.yml'

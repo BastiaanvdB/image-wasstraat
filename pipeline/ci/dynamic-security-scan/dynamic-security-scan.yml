@@ -26,10 +26,10 @@ falco-scan:
     - echo "Current directory is $(pwd)"
     
     # Pull the Falco image
-    - docker pull falcosecurity/falco:latest
+    - docker pull falcosecurity/falco:latest || { echo "Failed to pull Falco image."; exit 1; }
     
     # Ensure the report directory exists
-    - mkdir -p reports
+    - mkdir -p reports || { echo "Failed to create reports directory."; exit 1; }
 
     # Run Falco container with the custom rules and required volume mounts
     - |
@@ -37,12 +37,13 @@ falco-scan:
         docker run --rm -d --name falco --privileged \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v $(pwd)/ci/dynamic-security-scan/config/falco_rules.yaml:/etc/falco/falco_rules.yaml:ro \
-          -v $(pwd)/ci/dynamic-security-scan/config/falco.yaml:/etc/falco/falco.yaml:ro \
+          -v $(pwd)/ci/dynamic-security-scan/config/falco.yaml:/etc/falco/falco.yaml:rw \
           -v $(pwd)/ci/dynamic-security-scan/reports:/var/log \
           -v /proc:/host/proc:ro \
           -v /boot:/host/boot:ro \
           -v /lib/modules:/host/lib/modules:ro \
           -v /usr:/host/usr:ro \
+          -v /dev:/host/dev \
           falcosecurity/falco:latest
       else
         echo "Falco configuration or rules file not found."
@@ -54,19 +55,20 @@ falco-scan:
 
     # Run the specified test image to trigger events
     - |
-      docker run --rm -d --name test-container $IMAGE_NAME:$IMAGE_TAG
+      CONTAINER_ID=$(docker run --rm -d --name test-container $IMAGE_NAME:$IMAGE_TAG) || { echo "Failed to start test-container."; exit 1; }
+      echo $CONTAINER_ID > reports/container_id.txt || { echo "Failed to write container ID."; exit 1; }
 
     # Debugging: Check the status of the Falco container
-    - docker ps -a
+    - docker ps -a || { echo "Failed to list containers."; exit 1; }
     
     # Wait to allow Falco to detect events
     - sleep 60  
 
     # Debugging: Check the logs of the Falco container before saving
-    - docker logs falco || echo "Falco container not found or has exited."
+    - docker logs falco || { echo "Falco container not found or has exited."; exit 1; }
     
     # Retrieve Falco logs and save them as an artifact
-    - cp $(pwd)/ci/dynamic-security-scan/reports/falco-report.json reports/falco-report.json || echo "Failed to save Falco logs."
+    - cp $(pwd)/ci/dynamic-security-scan/reports/falco-report.json reports/falco-report.json || { echo "Failed to save Falco logs."; exit 1; }
   artifacts:
     paths:
       - reports/
